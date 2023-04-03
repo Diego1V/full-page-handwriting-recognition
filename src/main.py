@@ -7,6 +7,9 @@ from copy import copy
 from pathlib import Path
 from functools import partial
 
+from pytorch_lightning.cli import LightningCLI
+from pytorch_lightning.tuner import Tuner
+
 from lit_models import LitFullPageHTREncoderDecoder
 from lit_callbacks import LogModelPredictions, LogWorstPredictions, PREDICTIONS_TO_LOG
 from data import IAMDataset, IAMDatasetSynthetic, IAMSyntheticDataGenerator
@@ -16,8 +19,10 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from pytorch_lightning import seed_everything, Trainer
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, ModelSummary
-from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, ModelSummary, LearningRateFinder, \
+    LearningRateMonitor
+# from pytorch_lightning.plugins import DDPPlugin
+from argparse import ArgumentParser
 
 LOGGING_DIR = "lightning_logs/"
 
@@ -61,6 +66,7 @@ def main(args):
         label_enc=label_enc,
         only_lowercase=args.use_lowercase,
     )
+
 
     if n_classes_saved is None:
         n_classes_saved = ds.label_enc.n_classes
@@ -119,17 +125,19 @@ def main(args):
             # in writing style on a single line.
             words_per_sequence = (2, 5)
         ds_train = IAMDatasetSynthetic(
-            ds_train,
+            ds_train.dataset,
             synth_prob=args.synthetic_augmentation_proba,
             words_per_sequence=words_per_sequence,
         )
         worker_init_fn = IAMSyntheticDataGenerator.get_worker_init_fn()
 
     # Initialize dataloaders.
+    print("AQUI")
+    #tamaño ds_train 25928
     dl_train = DataLoader(
         ds_train,
-        batch_size=args.batch_size,
         shuffle=True,
+        batch_size=args.batch_size,
         collate_fn=collate_fn,
         num_workers=args.num_workers,
         pin_memory=True,
@@ -144,7 +152,7 @@ def main(args):
         pin_memory=True,
     )
     dl_test = DataLoader(
-        ds_test,
+        ds_val,#ds_test,
         batch_size=2 * args.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
@@ -204,13 +212,13 @@ def main(args):
         ),
         ModelSummary(max_depth=2),
         LitProgressBar(),
-        LogWorstPredictions(
-            dl_train,
-            dl_val,
-            dl_test,
-            training_skipped=(args.validate is not None or args.test is not None),
-            data_format=args.data_format,
-        ),
+        # LogWorstPredictions(
+        #     dl_train,
+        #     dl_val,
+        #     dl_test,
+        #     training_skipped=(args.validate is not None or args.test is not None),
+        #     data_format=args.data_format,
+        # ),
         LogModelPredictions(
             ds.label_enc,
             val_batch=next(
@@ -251,6 +259,8 @@ def main(args):
             data_format=args.data_format,
             use_gpu=(False if args.use_cpu else True),
         ),
+        #LearningRateFinder(num_training_steps=100),
+        # LearningRateMonitor(logging_interval="step")
     ]
     if args.early_stopping_patience != -1:
         callbacks.append(
@@ -263,14 +273,36 @@ def main(args):
             )
         )
 
-    trainer = Trainer.from_argparse_args(
-        args,
-        logger=tb_logger,
-        strategy=(
-            DDPPlugin(find_unused_parameters=False) if args.num_nodes != 1 else None
-        ),  # ddp = Distributed Data Parallel
-        gpus=(0 if args.use_cpu else 1),
+
+    # trainer : Trainer = Trainer.from_argparse_args(
+    #     args,
+    #     #auto_lr_find=True,
+    #     logger=tb_logger,
+    #     # strategy=(
+    #     #     DDPPlugin(find_unused_parameters=False) if args.num_nodes != 1 else None
+    #     # ),  # ddp = Distributed Data Parallel
+    #     #gpus=(0 if args.use_cpu else 1),
+    #     accelerator='gpu',
+    #     devices='1',
+    #     callbacks=callbacks,
+    #
+    # )
+    # cli = LightningCLI(model_class=LitFullPageHTREncoderDecoder)
+    # cli.add_arguments_to_parser(args)
+    #
+
+
+    trainer : Trainer = Trainer(
+        max_epochs= args.max_epochs,
+        strategy= 'ddp' if args.num_nodes != 1 else 'auto',
+        accelerator='gpu',
+        devices='1',
         callbacks=callbacks,
+        logger=tb_logger,
+        enable_model_summary=False
+
+
+
     )
 
     if args.validate:  # validate a trained model
@@ -278,11 +310,13 @@ def main(args):
     elif args.test:  # test a trained model
         trainer.test(model, dl_test)
     else:  # train a model
+        #dl_train = dl_train._get_iterator().next()[0].size() [batch,maxAltura, maxAncho]
+
         trainer.fit(model, dl_train, dl_val)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser : ArgumentParser = argparse.ArgumentParser()
 
     # fmt: off
     parser.add_argument("--data_dir", type=str)
@@ -305,7 +339,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_aachen_splits", action="store_true", default=False)
     parser.add_argument("--use_lowercase", action="store_true", default=False,
                         help="Convert all target label sequences to lowercase.")
-    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--num_workers", type=int, default=0)#0
     parser.add_argument("--early_stopping_patience", type=int, default=-1,
                         help="Number of checks with no improvement after which "
                              "training will be stopped. Setting this to -1 will disable "
@@ -316,11 +350,22 @@ if __name__ == "__main__":
     parser.add_argument("--experiment_name", type=str, default=None,
                         help="Experiment name, used as the name of the folder in "
                              "which logs are stored.")
+    ##########################3
+    parser.add_argument("--num_nodes", type=int, default=1)
+    parser.add_argument("--accumulate_grad_batches", type=int, default=1)
+    parser.add_argument("--max_epochs", type=int, default=20)
+    parser.add_argument("--precision", type=int, default=32)
+    parser.add_argument("--gradient_clip_val", type=int, default=None)
+
     # fmt: on
 
+    #cli = LightningCLI(model_class=LitFullPageHTREncoderDecoder,parser_kwargs=parser)
     parser = LitFullPageHTREncoderDecoder.add_model_specific_args(parser)
-    parser = Trainer.add_argparse_args(parser)  # adds Pytorch Lightning arguments
+    #parser = LightningCLI().add_arguments_to_parser(parser)
+
 
     args = parser.parse_args()
+
+    # parser = Trainer.add_argparse_args(parser)  # adds Pytorch Lightning arguments
 
     main(args)

@@ -37,7 +37,7 @@ def run_model(
         # define perplexity as the exponential of the cross-entropy.
         perplexities, predictions = [], []
         for im in imgs:
-            with torch.inference_mode():
+            with torch.inference_mode(): #EVITAR CALCULAR GRADIENTES
                 logits, preds, _ = model(im.unsqueeze(0))
                 pred_probs, _ = F.softmax(logits.squeeze(), -1).max(-1)
                 prp = torch.exp(torch.sum(-torch.log(pred_probs)) / pred_probs.size(0))

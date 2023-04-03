@@ -1,5 +1,7 @@
 from typing import Optional, Dict, Union
 
+from pytorch_lightning.utilities.types import TRAIN_DATALOADERS
+
 from models import FullPageHTREncoderDecoder
 from util import LabelEncoder
 
@@ -81,12 +83,24 @@ class LitFullPageHTREncoderDecoder(pl.LightningModule):
         return self.model.decoder
 
     def forward(self, imgs: Tensor, targets: Optional[Tensor] = None):
+        """
+        Forward de inferencia
+        :param imgs:
+        :param targets:
+        :return:
+        """
         return self.model(imgs, targets)
 
     def training_step(self, batch, batch_idx):
+        """
+        Forward de entrenamiento
+        :param batch:
+        :param batch_idx:
+        :return:
+        """
         imgs, targets = batch
         logits, loss = self.model.forward_teacher_forcing(imgs, targets)
-        self.log("train_loss", loss, sync_dist=True, prog_bar=False)
+        self.log("train_loss", loss, sync_dist=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -108,6 +122,8 @@ class LitFullPageHTREncoderDecoder(pl.LightningModule):
         self.log("val_loss", loss, sync_dist=True, prog_bar=True)
 
         return loss
+
+
 
     def configure_optimizers(self):
         return optim.Adam(self.parameters(), lr=self.learning_rate)

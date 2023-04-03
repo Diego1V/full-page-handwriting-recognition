@@ -98,6 +98,7 @@ class IAMImageTransforms:
         max_img_h, max_img_w = self.max_img_size
 
         max_scale = scale + scale * random_scale_limit
+
         padded_h, padded_w = math.ceil(max_scale * max_img_h), math.ceil(
             max_scale * max_img_w
         )

@@ -52,6 +52,7 @@ class IAMDataset(Dataset):
         only_lowercase: bool = False,
         label_enc: Optional[LabelEncoder] = None,
     ):
+
         super().__init__()
         _parse_methods = ["form", "line", "word"]
         err_message = (
@@ -135,6 +136,19 @@ class IAMDataset(Dataset):
         eos_tkn_idx: int,
         dataset_returns_writer_id: bool = False,
     ) -> Union[Tuple[Tensor, Tensor], Tuple[Tensor, Tensor, Tensor]]:
+        """
+        Fusiona en un tensor la lista de tuplas (imagen, etiqueta).
+        Donde la imagen es paddeada a la dimension max de las imagenes y
+        las etiquetas a la longitud max de las etiquetas.
+
+        :param batch: Lista de tuplas (imagen, etiqueta).
+        :param pad_val: Valor de relleno en indice de vocabulario.
+        :param eos_tkn_idx: Índice del token de fin de secuencia.
+        :param dataset_returns_writer_id:
+        :return:
+        """
+
+
         if dataset_returns_writer_id:
             imgs, writer_ids, targets = zip(*batch)
         else:
@@ -144,6 +158,7 @@ class IAMDataset(Dataset):
         if (
             not len(set(img_sizes)) == 1
         ):  # images are of varying sizes, so pad them to the maximum size in the batch
+            # Con ese padding se consigue ajustar las imagenes en el batch
             hs, ws = zip(*img_sizes)
             pad_fn = A.PadIfNeeded(
                 max(hs), max(ws), border_mode=cv.BORDER_CONSTANT, value=0
@@ -152,14 +167,19 @@ class IAMDataset(Dataset):
         imgs = np.stack(imgs, axis=0)
 
         seq_lengths = [t.shape[0] for t in targets]
+        #Por que se paddea el target?
         targets_padded = np.full((len(targets), max(seq_lengths) + 1), pad_val)
         for i, t in enumerate(targets):
             targets_padded[i, : seq_lengths[i]] = t
             targets_padded[i, seq_lengths[i]] = eos_tkn_idx
 
         imgs, targets_padded = torch.tensor(imgs), torch.tensor(targets_padded)
+        #imgs = tensor[batch, alturaMAX, anchuraMAX]
+        #targets_padded = tensor[batch, longitudMAX]
+
         if dataset_returns_writer_id:
             return imgs, targets_padded, torch.tensor(writer_ids)
+
         return imgs, targets_padded
 
     def set_transforms_for_split(self, split: str):
@@ -175,6 +195,7 @@ class IAMDataset(Dataset):
             max_img_h = (self.data["bb_y_end"] - self.data["bb_y_start"]).max()
         else:  # word or line
             max_img_h = self.MAX_FORM_HEIGHT
+
         transforms = IAMImageTransforms(
             (max_img_h, max_img_w), self.parse_method, (IAMDataset.MEAN, IAMDataset.STD)
         )
@@ -281,10 +302,10 @@ class IAMDataset(Dataset):
         root = self.root / "words"
         for d1 in root.iterdir():
             for d2 in d1.iterdir():
-                doc_id = d2.name
+                doc_id = d2.name #d2
                 xml_root = read_xml(self.root / "xml" / (doc_id + ".xml"))
-                writer_id = int(xml_root.get("writer-id"))
-                for img_path in d2.iterdir():
+                writer_id = xml_root.get("writer-id") #int()
+                for img_path in d2.iterdir(): #d2
                     target = self._find_word(
                         xml_root, img_path.stem, skip_bad_segmentation
                     )
@@ -314,6 +335,7 @@ class IAMDataset(Dataset):
         word_id: str,
         skip_bad_segmentation: bool = False,
     ) -> Union[str, None]:
+        #line_id = "-".join(word_id.split("-")[:-1])
         line_id = "-".join(word_id.split("-")[:-1])
         line = find_child_by_tag(xml_root[1].findall("line"), "id", line_id)
         if line is not None and not (
@@ -323,6 +345,7 @@ class IAMDataset(Dataset):
             if word is not None:
                 return html.unescape(word.get("text"))
         return None
+
 
 
 class IAMSyntheticDataGenerator(Dataset):
@@ -461,17 +484,18 @@ class IAMSyntheticDataGenerator(Dataset):
 
         img_idxs = [start_idx]
         img_path = Path(self.iam_words.data.iloc[start_idx]["img_path"])
-        _, _, line_id, word_id = img_path.stem.split("-")
+        #_, _, line_id, word_id = img_path.stem.split("-")
+        _, line_id, word_id = img_path.stem.split("-")
         sampled_words = 1
         while sampled_words < words_to_sample:
-            word_id = f"{int(word_id) + 1 :02}"
+            word_id = f"{int(word_id) + 1 }"#:02
             img_name = (
                 "-".join(img_path.stem.split("-")[:-2] + [line_id, word_id]) + ".png"
             )
             if not (img_path.parent / img_name).is_file():
                 # Previous image was the last on its line. Go to the next line.
-                line_id = f"{int(line_id) + 1 :02}"
-                word_id = "00"
+                line_id = f"{int(line_id) + 1}" #02
+                word_id = "0" #00
                 img_name = (
                     "-".join(img_path.stem.split("-")[:-2] + [line_id, word_id])
                     + ".png"

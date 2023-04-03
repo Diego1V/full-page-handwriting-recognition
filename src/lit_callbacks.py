@@ -1,6 +1,8 @@
 import math
 from typing import Tuple, Optional
 
+from pytorch_lightning import Trainer
+
 from lit_models import LitFullPageHTREncoderDecoder
 from util import matplotlib_imshow, LabelEncoder, decode_prediction_and_target
 from data import IAMDataset
@@ -128,6 +130,7 @@ class LogWorstPredictions(Callback):
             best_model_path,
             label_encoder=label_encoder,
         )
+        newTrainer = Trainer()
         trainer.model = model
 
 

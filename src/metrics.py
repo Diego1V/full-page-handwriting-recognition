@@ -11,10 +11,11 @@ class CharacterErrorRate(Metric):
     by length of the target. Roughly speaking, this indicates the percentage or
     characters that were incorrectly predicted.
     """
-
+    full_state_update: bool = True
     def __init__(self, label_encoder: LabelEncoder):
         super().__init__()
         self.label_encoder = label_encoder
+
 
         self.add_state("edits", default=Tensor([0]), dist_reduce_fx="sum")
         self.add_state("total_chars", default=Tensor([0]), dist_reduce_fx="sum")
@@ -61,7 +62,7 @@ class WordErrorRate(Metric):
     the number of words in the target. This works the same way as Character Error
     Rate, except that we analyse at the word level, rather than the character level.
     """
-
+    full_state_update: bool = True
     def __init__(self, label_encoder: LabelEncoder):
         super().__init__()
         self.label_encoder = label_encoder

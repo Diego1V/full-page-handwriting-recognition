@@ -9,11 +9,13 @@ from typing import Dict, Any, Tuple, Optional, Union, Callable
 from metrics import CharacterErrorRate, WordErrorRate
 from util import LabelEncoder
 
+from torch.nn import Softmax
 import torch
 import torch.nn as nn
 import torchvision
 from torch import Tensor
 
+global dimensionBatc
 
 class PositionalEmbedding1D(nn.Module):
     """
@@ -166,17 +168,31 @@ class FullPageHTRDecoder(nn.Module):
         self.clf = nn.Linear(d_model, vocab_len)
         self.drop = nn.Dropout(p=dropout)
 
+
+
     def forward(self, memory: Tensor):
+        """
+
+        :param memory: De la forma (Batch, ParchesAplanados, nElementosMapaCaracteristicas)
+
+        :return:
+        """
         """Greedy decoding."""
+
+        #Entrada del decoder no salida del encoder
         B, _, _ = memory.shape
-        all_logits = []
+        all_logits = [] #Valores de salida previos a la funcion de activacion
         sampled_ids = [torch.full([B], self.sos_tkn_idx).to(memory.device)]
+        #Por q se multiplica por sqrt(d_model)?
         tgt = self.pos_emb(  # tgt: (bs, 1, d_model)
             self.emb(sampled_ids[0]).unsqueeze(1) * math.sqrt(self.d_model)
         )
         tgt = self.drop(tgt)
+        #####
         eos_sampled = torch.zeros(B).bool()
-        for t in range(self.max_seq_len):
+
+        #Se concatena la salida del enconder [memory] y la entrada propia del decoder [tgt]
+        for t in range(self.max_seq_len): #500 # Longitud maxima del artefacto (LINEA, FORMULARIO) en caracteres
             tgt_mask = self.subsequent_mask(len(sampled_ids)).to(memory.device)
             out = self.decoder(tgt, memory, tgt_mask=tgt_mask)  # out: (B, T, d_model)
             logits = self.clf(out[:, -1, :])  # logits: (B, vocab_size)
@@ -239,10 +255,16 @@ class FullPageHTRDecoder(nn.Module):
             tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask
         )
         logits = self.clf(out)
+
         return logits
 
     @staticmethod
     def subsequent_mask(size: int):
+        """
+        Devuelve una mascara escalonada de forma triangular superior boleana
+        :param size:
+        :return:
+        """
         mask = torch.triu(torch.ones(size, size), diagonal=1)
         return mask == 1
 
@@ -274,10 +296,13 @@ class FullPageHTREncoder(nn.Module):
         self.pos_emb = PositionalEmbedding2D(d_model)
         self.drop = nn.Dropout(p=dropout)
 
-        resnet = getattr(torchvision.models, model_name)(pretrained=False)
+        resnet = getattr(torchvision.models, model_name)#(pretrained=False)
+        resnet = resnet()
         modules = list(resnet.children())
 
-        # Change the first conv layer to take as input a single channel image.
+
+        #RESNET sin AvgPool y sin Linear
+        # Change the first conv layer to take as input a single channel image. POR Q???
         cnv_1 = modules[0]
         cnv_1 = nn.Conv2d(
             1,
@@ -288,11 +313,16 @@ class FullPageHTREncoder(nn.Module):
             bias=cnv_1.bias,
         )
         self.encoder = nn.Sequential(cnv_1, *modules[1:-2])
+        #Ajustar salida con entrada del decoder
         self.linear = nn.Conv2d(
             resnet.fc.in_features, d_model, kernel_size=1
         )  # 1x1 convolution
 
     def forward(self, imgs):
+        global dimensiones
+        dimensiones = imgs.size()
+        #imgs = [batch, maxAlto, maxAncho]
+        #d_model = Tamaño del mapa de características
         x = self.encoder(imgs.unsqueeze(1))  # x: (B, d_model, w, h)
         x = self.linear(x).transpose(1, 2).transpose(2, 3)  # x: (B, w, h, d_model)
         x = self.pos_emb(x)  # x: (B, w, h, d_model)
@@ -383,6 +413,7 @@ class FullPageHTREncoderDecoder(nn.Module):
         self, imgs: Tensor, targets: Optional[Tensor] = None
     ) -> Tuple[Tensor, Tensor, Union[Tensor, None]]:
         """
+        Forward de inferencia
         Run inference on the model using greedy decoding.
 
         Returns:
@@ -394,6 +425,7 @@ class FullPageHTREncoderDecoder(nn.Module):
         """
         logits, sampled_ids = self.decoder(self.encoder(imgs))
         loss = None
+        #Cuando se usa en inferencia no se tiene el target
         if targets is not None:
             loss = self.loss_fn(
                 logits[:, : targets.size(1), :].transpose(1, 2),
@@ -405,15 +437,26 @@ class FullPageHTREncoderDecoder(nn.Module):
         self, imgs: Tensor, targets: Tensor
     ) -> Tuple[Tensor, Tensor]:
         """
-        Run inference on the model using greedy decoding and teacher forcing.
-
-        Teacher forcing implies that at each decoding time step, the ground truth
-        target of the previous time step is fed as input to the model.
-
-        Returns:
-            - logits, obtained at each time step during decoding
-            - loss value
+        Forward de entrenamiento
+        :param imgs: Imagenes de entrada
+        :param targets: Etiquetas codificadas y padeadas a maxima longitud del  batch
+        :return:
+              - logits, obtained at each time step during decoding
+              - loss value
         """
+        # """
+        #
+        # Forward del modelo en entrenamiento.
+        #
+        # Run inference on the model using greedy decoding and teacher forcing.
+        #
+        # Teacher forcing implies that at each decoding time step, the ground truth
+        # target of the previous time step is fed as input to the model.
+        #
+        # Returns:
+        #     - logits, obtained at each time step during decoding
+        #     - loss value
+        # """
         memory = self.encoder(imgs)
         logits = self.decoder.decode_teacher_forcing(memory, targets)
         loss = self.loss_fn(logits.transpose(1, 2), targets)
